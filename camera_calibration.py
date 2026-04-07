@@ -1,10 +1,11 @@
 import numpy as np
 import cv2 as cv
+import datetime
 
 TW = 800 # Target width for display
 
 
-def select_img_from_video(video_file, board_pattern, select_all=False, wait_msec=10, wnd_name='Camera Calibration'):
+def select_img_from_video(video_file, board_pattern, recorder, w, h, select_all=False, wait_msec=10, wnd_name='Camera Calibration'):
     # Open a video
     video = cv.VideoCapture(video_file)
     assert video.isOpened()
@@ -14,16 +15,12 @@ def select_img_from_video(video_file, board_pattern, select_all=False, wait_msec
     while True:
         # Grab an images from the video
         valid, img = video.read()
-        # 가로를 TW로 고정하고 세로 비율 유지
-        target_width = TW
-        aspect_ratio = img.shape[0] / img.shape[1] # 세로/가로 비율
-        target_height = int(target_width * aspect_ratio)
 
-        dim = (target_width, target_height)
-        img = cv.resize(img, dim, interpolation=cv.INTER_AREA)
-        
         if not valid:
             break
+
+        dim = (w, h)
+        img = cv.resize(img, dim, interpolation=cv.INTER_AREA)
 
         if select_all:
             img_select.append(img)
@@ -32,6 +29,7 @@ def select_img_from_video(video_file, board_pattern, select_all=False, wait_msec
             display = img.copy()
             cv.putText(display, f'NSelect: {len(img_select)}', (10, 25), cv.FONT_HERSHEY_DUPLEX, 0.6, (0, 255, 0))
             cv.imshow(wnd_name, display)
+            recorder.write(display) # Record the video with the display
 
             # Process the key event
             key = cv.waitKey(wait_msec)
@@ -39,9 +37,15 @@ def select_img_from_video(video_file, board_pattern, select_all=False, wait_msec
                 complete, pts = cv.findChessboardCorners(img, board_pattern)
                 cv.drawChessboardCorners(display, board_pattern, pts, complete)
                 cv.imshow(wnd_name, display)
+                recorder.write(display) # Record the video with the display
                 key = cv.waitKey()
-                if key == ord('\r'):
-                    img_select.append(img) # Enter: Select the image
+                while key != ord('\r'): # Space: Resume
+                    recorder.write(display) # Record the video with the display
+                    key = cv.waitKey()
+
+                img_select.append(img) # Enter: Select the image
+
+                    
             if key == 27:                  # ESC: Exit (Complete image selection)
                 break
 
@@ -65,7 +69,7 @@ def calib_camera_from_chessboard(images, board_pattern, board_cellsize, K=None, 
     # Calibrate the camera
     return cv.calibrateCamera(obj_points, img_points, gray.shape[::-1], K, dist_coeff, flags=calib_flags)
 
-def distortion_correction(target_video, target_K, target_dist_coeff):
+def distortion_correction(target_video, target_K, target_dist_coeff, recorder, w, h):
     # The given video and calibration data
     video_file = target_video
     K = target_K # Derived from `calibrate_camera.py`
@@ -81,16 +85,12 @@ def distortion_correction(target_video, target_K, target_dist_coeff):
     while True:
         # Read an image from the video
         valid, img = video.read()
-        # 가로를 TW로 고정하고 세로 비율 유지
-        target_width = TW
-        aspect_ratio = img.shape[0] / img.shape[1] # 세로/가로 비율
-        target_height = int(target_width * aspect_ratio)
 
-        dim = (target_width, target_height)
-        img = cv.resize(img, dim, interpolation=cv.INTER_AREA)
         if not valid:
             break
-
+        dim = (w, h)
+        img = cv.resize(img, dim, interpolation=cv.INTER_AREA)
+        
         # Rectify geometric distortion (Alternative: `cv.undistort()`)
         info = "Original"
         if show_rectify:
@@ -102,6 +102,7 @@ def distortion_correction(target_video, target_K, target_dist_coeff):
 
         # Show the image and process the key event
         cv.imshow("Geometric Distortion Correction", img)
+        recorder.write(img) # Record the video with the display
         key = cv.waitKey(10)
         if key == ord(' '):     # Space: Pause
             key = cv.waitKey()
@@ -110,14 +111,30 @@ def distortion_correction(target_video, target_K, target_dist_coeff):
         elif key == ord('\t'):  # Tab: Toggle the mode
             show_rectify = not show_rectify
 
-    return cv.undistort(video, K, dist_coeff)
+
 
 if __name__ == '__main__':
-    video_file = 'data01.mp4'
+    video_file = 'data.mp4'
+    video_name = video_file.split('.')[0]
     board_pattern = (10, 7)
     board_cellsize = 0.025
+    # 비디오 설정을 위한 정보 가져오기
+    cap = cv.VideoCapture(video_file)
+    fps = cap.get(cv.CAP_PROP_FPS) # 원본 FPS 가져오기
+    width_original = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
+    height_original = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+    # 가로를 TW로 고정하고 세로 비율 유지
+    target_width = TW
+    aspect_ratio = height_original / width_original # 세로/가로 비율
+    target_height = int(target_width * aspect_ratio)
+    fourcc = cv.VideoWriter_fourcc(*'XVID') # AVI 저장을 위한 코덱
+    plain_font = cv.FONT_HERSHEY_SIMPLEX
+    #전체 영상
+    out_recorder = cv.VideoWriter("Play_" + video_name + "_" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".avi", fourcc, fps, (target_width, target_height))
+    #결과 영상
+    result_recorder = cv.VideoWriter("Result_" + video_name + "_" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".avi", fourcc, fps, (target_width, target_height))
 
-    img_select = select_img_from_video(video_file, board_pattern)
+    img_select = select_img_from_video(video_file, board_pattern, out_recorder, target_width, target_height)
     assert len(img_select) > 0, 'There is no selected images!'
     rms, K, dist_coeff, rvecs, tvecs = calib_camera_from_chessboard(img_select, board_pattern, board_cellsize)
 
@@ -129,4 +146,10 @@ if __name__ == '__main__':
     print(f'* Distortion coefficient (k1, k2, p1, p2, k3, ...) = {dist_coeff.flatten()}')
 
     # Run distortion correction
-    distortion_correction(video_file, K, dist_coeff)
+    distortion_correction(video_file, K, dist_coeff, result_recorder, target_width, target_height)
+
+    # 모든 작업 완료 후
+    out_recorder.release()
+    result_recorder.release()
+    cv.destroyAllWindows()
+    print("Video saving completed.")
